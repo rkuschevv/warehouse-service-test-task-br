@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import logging
+from functools import lru_cache
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,7 +21,7 @@ app = FastAPI(
 warehouses = {}
 movements = {}
 
-class WarehouseState(BaseModel):
+class WarehouseState(BaseModel):    
     warehouse_id: str
     product_id: str
     quantity: int
@@ -37,14 +38,29 @@ class MovementInfo(BaseModel):
     arrival_quantity: Optional[int] = None
     quantity_difference: Optional[int] = None
 
+# Добавляем кэширование для улучшения производительности
+@lru_cache(maxsize=100)
+def get_movement_cached(movement_id: str) -> Optional[MovementInfo]:
+    """Кэшируемая функция для получения информации о перемещении"""
+    return movements.get(movement_id)
+
+@lru_cache(maxsize=100)
+def get_warehouse_state_cached(warehouse_key: str) -> Optional[WarehouseState]:
+    """Кэшируемая функция для получения состояния склада"""
+    return warehouses.get(warehouse_key)
+
 @app.get("/api/movements/{movement_id}", response_model=MovementInfo)
 async def read_movement(movement_id: str):
     """
     Получение информации о перемещении товара по ID
     """
-    if movement_id not in movements:
-        raise HTTPException(status_code=404, detail="Перемещение не найдено")
-    return movements[movement_id]
+    movement = get_movement_cached(movement_id)
+    if movement is None:
+        # Если данных нет в кэше, пробуем получить напрямую
+        movement = movements.get(movement_id)
+        if movement is None:
+            raise HTTPException(status_code=404, detail="Перемещение не найдено")
+    return movement
 
 @app.get("/api/warehouses/{warehouse_id}/products/{product_id}", response_model=WarehouseState)
 async def read_warehouse_state(warehouse_id: str, product_id: str):
@@ -52,9 +68,11 @@ async def read_warehouse_state(warehouse_id: str, product_id: str):
     Получение информации о текущем запасе товара на складе
     """
     warehouse_key = f"{warehouse_id}:{product_id}"
-    if warehouse_key not in warehouses:
+    state = get_warehouse_state_cached(warehouse_key)
+    if state is None:
+        # Если данных нет в кэше, возвращаем нулевое количество
         return WarehouseState(warehouse_id=warehouse_id, product_id=product_id, quantity=0)
-    return warehouses[warehouse_key]
+    return state
 
 @app.get("/")
 async def root():
@@ -64,6 +82,13 @@ async def root():
 async def health_check():
     """Проверка состояния приложения"""
     return {"status": "ok"}
+
+# Функция для очистки кэша при обновлении данных
+def invalidate_cache():
+    """Очищает кэш"""
+    get_movement_cached.cache_clear()
+    get_warehouse_state_cached.cache_clear()
+    logger.info("Кэш очищен")
 
 # Для тестирования добавим тестовые данные
 @app.on_event("startup")
@@ -91,6 +116,14 @@ async def startup_event():
         warehouse_id="WH-1",
         product_id="PROD-1",
         quantity=100
+    )
+    
+    # Добавляем еще один тестовый склад
+    warehouse_key = "WH-2:PROD-1"
+    warehouses[warehouse_key] = WarehouseState(
+        warehouse_id="WH-2",
+        product_id="PROD-1",
+        quantity=50
     )
     
     logger.info("Приложение запущено")
