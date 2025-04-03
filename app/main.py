@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Callable
 import logging
 from functools import lru_cache
+import time
+import json
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,6 +22,12 @@ app = FastAPI(
 # Временное хранилище данных (в реальном приложении заменить на базу данных)
 warehouses = {}
 movements = {}
+request_metrics = {
+    "total_requests": 0,
+    "success_requests": 0,
+    "error_requests": 0,
+    "avg_response_time": 0
+}
 
 class WarehouseState(BaseModel):    
     warehouse_id: str
@@ -37,6 +45,54 @@ class MovementInfo(BaseModel):
     departure_quantity: Optional[int] = None
     arrival_quantity: Optional[int] = None
     quantity_difference: Optional[int] = None
+
+class Metrics(BaseModel):
+    total_requests: int
+    success_requests: int
+    error_requests: int
+    avg_response_time: float
+
+# Middleware для мониторинга запросов и логирования
+@app.middleware("http")
+async def monitor_requests(request: Request, call_next: Callable) -> Response:
+    start_time = time.time()
+    response = None
+    
+    # Увеличиваем счетчик общего количества запросов
+    request_metrics["total_requests"] += 1
+    
+    try:
+        response = await call_next(request)
+        
+        # Если запрос успешный, увеличиваем счетчик успешных запросов
+        if response.status_code < 400:
+            request_metrics["success_requests"] += 1
+        else:
+            request_metrics["error_requests"] += 1
+            
+        # Логируем информацию о запросе
+        process_time = time.time() - start_time
+        
+        # Обновляем среднее время ответа
+        current_avg = request_metrics["avg_response_time"]
+        total_requests = request_metrics["total_requests"]
+        request_metrics["avg_response_time"] = (current_avg * (total_requests - 1) + process_time) / total_requests
+        
+        logger.info(f"{request.method} {request.url.path} {response.status_code} {process_time:.4f}s")
+        
+        return response
+    except Exception as e:
+        # Если произошла ошибка, увеличиваем счетчик ошибок
+        request_metrics["error_requests"] += 1
+        
+        # Логируем ошибку
+        logger.error(f"Ошибка при обработке запроса {request.method} {request.url.path}: {str(e)}")
+        
+        # Если не был создан ответ, создаем ответ с ошибкой
+        if response is None:
+            response = Response(content=json.dumps({"detail": str(e)}), status_code=500, media_type="application/json")
+            
+        return response
 
 # Добавляем кэширование для улучшения производительности
 @lru_cache(maxsize=100)
@@ -73,6 +129,13 @@ async def read_warehouse_state(warehouse_id: str, product_id: str):
         # Если данных нет в кэше, возвращаем нулевое количество
         return WarehouseState(warehouse_id=warehouse_id, product_id=product_id, quantity=0)
     return state
+
+@app.get("/api/metrics", response_model=Metrics)
+async def get_metrics():
+    """
+    Получение метрик производительности API
+    """
+    return request_metrics
 
 @app.get("/")
 async def root():
