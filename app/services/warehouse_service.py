@@ -116,11 +116,17 @@ async def update_movement_departure(movement_id: str, warehouse_id: str, product
         
         # Если уже есть информация о прибытии, вычисляем разницу во времени и количестве
         if movement["arrival_time"]:
-            time_diff = (movement["arrival_time"] - timestamp).total_seconds()
-            quantity_diff = movement["arrival_quantity"] - quantity
-            
-            values["time_difference_seconds"] = time_diff
-            values["quantity_difference"] = quantity_diff
+            try:
+                time_diff = (movement["arrival_time"] - timestamp).total_seconds()
+                quantity_diff = movement["arrival_quantity"] - quantity
+                
+                values["time_difference_seconds"] = time_diff
+                values["quantity_difference"] = quantity_diff
+            except Exception as e:
+                logger.error(f"Ошибка при расчете разницы времени: {e}")
+                # Если возникла ошибка, устанавливаем значения по умолчанию
+                values["time_difference_seconds"] = 0
+                values["quantity_difference"] = 0
         
         query = movements.update().where(
             movements.c.movement_id == movement_id
@@ -153,11 +159,17 @@ async def update_movement_arrival(movement_id: str, warehouse_id: str, product_i
         
         # Если уже есть информация об отправке, вычисляем разницу во времени и количестве
         if movement["departure_time"]:
-            time_diff = (timestamp - movement["departure_time"]).total_seconds()
-            quantity_diff = quantity - movement["departure_quantity"]
-            
-            values["time_difference_seconds"] = time_diff
-            values["quantity_difference"] = quantity_diff
+            try:
+                time_diff = (timestamp - movement["departure_time"]).total_seconds()
+                quantity_diff = quantity - movement["departure_quantity"]
+                
+                values["time_difference_seconds"] = time_diff
+                values["quantity_difference"] = quantity_diff
+            except Exception as e:
+                logger.error(f"Ошибка при расчете разницы времени: {e}")
+                # Если возникла ошибка, устанавливаем значения по умолчанию
+                values["time_difference_seconds"] = 0
+                values["quantity_difference"] = 0
         
         query = movements.update().where(
             movements.c.movement_id == movement_id
